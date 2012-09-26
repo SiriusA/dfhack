@@ -125,24 +125,13 @@ command_result df_moveunits(color_ostream &out, vector <string> & parameters)
 	pos_cursor = DFCoord(cx,cy,cz);
 	df::unit cake;
 
-	// Iterate over all units, process the first one whose pos == pos_cursor
-	df::unit * targetUnit;
-	size_t numUnits = world->units.all.size();
-	for(size_t i=0; i< numUnits; i++)
-	{
-		targetUnit = world->units.all[i];	//Assume a match, then verify
-		DFCoord pos_unit(targetUnit->pos.x, targetUnit->pos.y, targetUnit->pos.z);
+	// Select unit at cursor.
+	df::unit * targetUnit = NULL;
+	targetUnit = Gui::getSelectedUnit(out);
 
-		if (pos_unit == pos_cursor)
-		{
-			break;
-		}
-		if (i + 1 == numUnits)
-		{
-			out.print("No unit found at cursor. Printing location coordinates.\n");
-			out << pos_cursor.x << ", " << pos_cursor.y << ", " << pos_cursor.z <<endl;
-			return CR_OK;
-		}
+	if(targetUnit == NULL)
+	{
+		out.printerr("No unit found at cursor.");
 	}
 
 	// Unit found.
@@ -152,14 +141,53 @@ command_result df_moveunits(color_ostream &out, vector <string> & parameters)
 	// Move unit.
 	if(move)
 	{
-		(*targetUnit).old_pos = targetUnit->pos;
+
+	
+		//(*targetUnit).old_pos = targetUnit->pos;
+		df::tile_occupancy oldPosOccupancy = mc.occupancyAt(targetUnit->pos);
+		df::tile_occupancy newPosOccupancy = mc.occupancyAt(movedCoord);
+		if(targetUnit->flags1.bits.on_ground != 0)
+		{
+			if(oldPosOccupancy.bits.unit == 1)
+			{
+				size_t numUnits = world->units.all.size();
+				size_t unitsAtCursor = 0;	
+				for(size_t i=0; i< numUnits; i++)
+				{
+					DFCoord pos_unit(world->units.all[i]->pos.x, world->units.all[i]->pos.y, world->units.all[i]->pos.z);
+					
+					if (pos_unit == pos_cursor)
+						unitsAtCursor++;
+				}
+				if(unitsAtCursor <= 2)
+				{
+					oldPosOccupancy.bits.unit_grounded = 0;
+				}
+			}
+			mc.setOccupancyAt(targetUnit->pos, oldPosOccupancy);
+			//Teleporting will dump creatures on their butts.
+			newPosOccupancy.bits.unit_grounded = 1;
+			mc.setOccupancyAt(movedCoord, newPosOccupancy);
+		}
+		if(targetUnit->flags1.bits.on_ground == 0)
+		{
+			//Only one unit can stand on a tile, correct?
+			oldPosOccupancy.bits.unit = 0;
+			//Teleporting will dump creatures on their butts.
+			targetUnit->flags1.bits.on_ground = 1; 
+			newPosOccupancy.bits.unit_grounded = 1;
+			mc.setOccupancyAt(movedCoord, newPosOccupancy);
+		}
+		
+
+
 		(*targetUnit).pos = movedCoord;
 		out << "Moved to: " << targetUnit->pos.x << ", " << targetUnit->pos.y << ", "<< targetUnit->pos.z <<endl;
 	}
 
 	// Update map.
 	mc.WriteAll();
-	
+
 	// Report success.
 	return CR_OK;
 }
