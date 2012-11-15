@@ -1,6 +1,6 @@
 /*
 https://github.com/peterix/dfhack
-Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
+Copyright (c) 2009-2012 Petr Mrázek (peterix@gmail.com)
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any
@@ -324,7 +324,7 @@ df::building *Buildings::allocInstance(df::coord pos, df::building_type type, in
         {
             auto obj = (df::building_trapst*)bld;
             if (obj->trap_type == trap_type::PressurePlate)
-                obj->unk_cc = 500;
+                obj->ready_timeout = 500;
             break;
         }
     default:
@@ -762,7 +762,7 @@ static void markBuildingTiles(df::building *bld, bool remove)
 
 static void linkRooms(df::building *bld)
 {
-    auto &vec = world->buildings.other[buildings_other_id::ANY_FREE];
+    auto &vec = world->buildings.other[buildings_other_id::IN_PLAY];
 
     bool changed = false;
 

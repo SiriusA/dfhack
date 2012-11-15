@@ -1,6 +1,6 @@
 /*
 https://github.com/peterix/dfhack
-Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
+Copyright (c) 2009-2012 Petr Mrázek (peterix@gmail.com)
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any
@@ -126,8 +126,34 @@ struct Core::Private
 void Core::cheap_tokenise(string const& input, vector<string> &output)
 {
     string *cur = NULL;
+    size_t i = 0;
 
-    for (size_t i = 0; i < input.size(); i++) {
+    // Check the first non-space character
+    while (i < input.size() && isspace(input[i])) i++;
+
+    // Special verbatim argument mode?
+    if (i < input.size() && input[i] == ':')
+    {
+        // Read the command
+        std::string cmd;
+        i++;
+        while (i < input.size() && !isspace(input[i]))
+            cmd.push_back(input[i++]);
+        if (!cmd.empty())
+            output.push_back(cmd);
+
+        // Find the argument
+        while (i < input.size() && isspace(input[i])) i++;
+
+        if (i < input.size())
+            output.push_back(input.substr(i));
+
+        return;
+    }
+
+    // Otherwise, parse in the regular quoted mode
+    for (; i < input.size(); i++)
+    {
         unsigned char c = input[i];
         if (isspace(c)) {
             cur = NULL;
@@ -219,28 +245,30 @@ static std::string getScriptHelp(std::string path, std::string helpprefix)
     return "No help available.";
 }
 
-static std::map<string,string> listScripts(PluginManager *plug_mgr, std::string path)
+static void listScripts(PluginManager *plug_mgr, std::map<string,string> &pset, std::string path, bool all, std::string prefix = "")
 {
     std::vector<string> files;
     getdir(path, files);
 
-    std::map<string,string> pset;
     for (size_t i = 0; i < files.size(); i++)
     {
         if (hasEnding(files[i], ".lua"))
         {
             std::string help = getScriptHelp(path + files[i], "-- ");
 
-            pset[files[i].substr(0, files[i].size()-4)] = help;
+            pset[prefix + files[i].substr(0, files[i].size()-4)] = help;
         }
         else if (plug_mgr->eval_ruby && hasEnding(files[i], ".rb"))
         {
             std::string help = getScriptHelp(path + files[i], "# ");
 
-            pset[files[i].substr(0, files[i].size()-3)] = help;
+            pset[prefix + files[i].substr(0, files[i].size()-3)] = help;
+        }
+        else if (all && !files[i].empty() && files[i][0] != '.')
+        {
+            listScripts(plug_mgr, pset, path+files[i]+"/", all, prefix+files[i]+"/");
         }
     }
-    return pset;
 }
 
 static bool fileExists(std::string path)
@@ -335,7 +363,7 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
                 con.print("Basic commands:\n"
                           "  help|?|man            - This text.\n"
                           "  help COMMAND          - Usage help for the given command.\n"
-                          "  ls|dir [PLUGIN]       - List available commands. Optionally for single plugin.\n"
+                          "  ls|dir [-a] [PLUGIN]  - List available commands. Optionally for single plugin.\n"
                           "  cls                   - Clear the console.\n"
                           "  fpause                - Force DF to pause.\n"
                           "  die                   - Force DF to close immediately\n"
@@ -346,6 +374,8 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
                           "  unload PLUGIN|all     - Unload a plugin or all loaded plugins.\n"
                           "  reload PLUGIN|all     - Reload a plugin or all loaded plugins.\n"
                          );
+
+				con.print("\nDFHack version " DFHACK_VERSION ".\n");
             }
             else if (parts.size() == 1)
             {
@@ -469,6 +499,12 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
         }
         else if(first == "ls" || first == "dir")
         {
+            bool all = false;
+            if (parts.size() && parts[0] == "-a")
+            {
+                all = true;
+                vector_erase_at(parts, 0);
+            }
             if(parts.size())
             {
                 string & plugname = parts[0];
@@ -491,7 +527,7 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
                 con.print(
                 "builtin:\n"
                 "  help|?|man            - This text or help specific to a plugin.\n"
-                "  ls [PLUGIN]           - List available commands. Optionally for single plugin.\n"
+                "  ls [-a] [PLUGIN]      - List available commands. Optionally for single plugin.\n"
                 "  cls                   - Clear the console.\n"
                 "  fpause                - Force DF to pause.\n"
                 "  die                   - Force DF to close immediately\n"
@@ -523,7 +559,8 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
                     con.print("  %-22s- %s\n",(*iter).name.c_str(), (*iter).description.c_str());
                     con.reset_color();
                 }
-                auto scripts = listScripts(plug_mgr, getHackPath() + "scripts/");
+                std::map<string, string> scripts;
+                listScripts(plug_mgr, scripts, getHackPath() + "scripts/", all);
                 if (!scripts.empty())
                 {
                     con.print("\nscripts:\n");
@@ -592,8 +629,7 @@ command_result Core::runCommand(color_ostream &con, const std::string &first, ve
         }
         else if(first == "fpause")
         {
-            World * w = getWorld();
-            w->SetPauseState(true);
+            World::SetPauseState(true);
             con.print("The game was forced to pause!\n");
         }
         else if(first == "cls")
@@ -786,6 +822,8 @@ std::string Core::getHackPath()
 #endif
 }
 
+void init_screen_module(Core *);
+
 bool Core::Init()
 {
     if(started)
@@ -856,6 +894,7 @@ bool Core::Init()
     */
     // initialize data defs
     virtual_identity::Init(this);
+    init_screen_module(this);
 
     // initialize common lua context
     Lua::Core::Init(con);
@@ -1087,7 +1126,7 @@ void Core::doUpdate(color_ostream &out, bool first_update)
         last_world_data_ptr = new_wdata;
         last_local_map_ptr = new_mapdata;
 
-        getWorld()->ClearPersistentCache();
+        World::ClearPersistentCache();
 
         // and if the world is going away, we report the map change first
         if(had_map)
@@ -1105,7 +1144,7 @@ void Core::doUpdate(color_ostream &out, bool first_update)
 
         if (isMapLoaded() != had_map)
         {
-            getWorld()->ClearPersistentCache();
+            World::ClearPersistentCache();
             onStateChange(out, new_mapdata ? SC_MAP_LOADED : SC_MAP_UNLOADED);
         }
     }
@@ -1576,15 +1615,27 @@ void ClassNameCheck::getKnownClassNames(std::vector<std::string> &names)
         names.push_back(*it);
 }
 
-bool Process::patchMemory(void *target, const void* src, size_t count)
+MemoryPatcher::MemoryPatcher(Process *p_) : p(p_)
+{
+    if (!p)
+        p = Core::getInstance().p;
+}
+
+MemoryPatcher::~MemoryPatcher()
+{
+    close();
+}
+
+bool MemoryPatcher::verifyAccess(void *target, size_t count, bool write)
 {
     uint8_t *sptr = (uint8_t*)target;
     uint8_t *eptr = sptr + count;
 
     // Find the valid memory ranges
-    std::vector<t_memrange> ranges;
-    getMemRanges(ranges);
+    if (ranges.empty())
+        p->getMemRanges(ranges);
 
+    // Find the ranges that this area spans
     unsigned start = 0;
     while (start < ranges.size() && ranges[start].end <= sptr)
         start++;
@@ -1607,23 +1658,45 @@ bool Process::patchMemory(void *target, const void* src, size_t count)
             return false;
 
     // Apply writable permissions & update
-    bool ok = true;
-
-    for (unsigned i = start; i < end && ok; i++)
+    for (unsigned i = start; i < end; i++)
     {
-        t_memrange perms = ranges[i];
+        auto &perms = ranges[i];
+        if ((perms.write || !write) && perms.read)
+            continue;
+
+        save.push_back(perms);
         perms.write = perms.read = true;
-        if (!setPermisions(perms, perms))
-            ok = false;
+        if (!p->setPermisions(perms, perms))
+            return false;
     }
 
-    if (ok)
-        memmove(target, src, count);
+    return true;
+}
 
-    for (unsigned i = start; i < end && ok; i++)
-        setPermisions(ranges[i], ranges[i]);
+bool MemoryPatcher::write(void *target, const void *src, size_t size)
+{
+    if (!makeWritable(target, size))
+        return false;
 
-    return ok;
+    memmove(target, src, size);
+    return true;
+}
+
+void MemoryPatcher::close()
+{
+    for (size_t i  = 0; i < save.size(); i++)
+        p->setPermisions(save[i], save[i]);
+
+    save.clear();
+    ranges.clear();
+};
+
+
+bool Process::patchMemory(void *target, const void* src, size_t count)
+{
+    MemoryPatcher patcher(this);
+
+    return patcher.write(target, src, count);
 }
 
 /*******************************************************************************
@@ -1643,7 +1716,6 @@ TYPE * Core::get##TYPE() \
     return s_mods.p##TYPE;\
 }
 
-MODULE_GETTER(World);
 MODULE_GETTER(Materials);
 MODULE_GETTER(Notes);
 MODULE_GETTER(Graphic);
