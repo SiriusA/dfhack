@@ -1,6 +1,6 @@
 /*
 https://github.com/peterix/dfhack
-Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
+Copyright (c) 2009-2012 Petr Mrázek (peterix@gmail.com)
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any
@@ -28,6 +28,7 @@ distribution.
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 using namespace std;
 
 #include "modules/Screen.h"
@@ -50,6 +51,11 @@ using namespace DFHack;
 #include "df/tile_page.h"
 #include "df/interfacest.h"
 #include "df/enabler.h"
+#include "df/unit.h"
+#include "df/item.h"
+#include "df/job.h"
+#include "df/building.h"
+#include "df/renderer.h"
 
 using namespace df::enums;
 using df::global::init;
@@ -59,6 +65,8 @@ using df::global::gview;
 using df::global::enabler;
 
 using Screen::Pen;
+
+using std::string;
 
 /*
  * Screen painting API.
@@ -100,13 +108,48 @@ static void doSetTile(const Pen &pen, int index)
 
 bool Screen::paintTile(const Pen &pen, int x, int y)
 {
-    if (!gps) return false;
+    if (!gps || !pen.valid()) return false;
 
     int dimx = gps->dimx, dimy = gps->dimy;
     if (x < 0 || x >= dimx || y < 0 || y >= dimy) return false;
 
     doSetTile(pen, x*dimy + y);
     return true;
+}
+
+Pen Screen::readTile(int x, int y)
+{
+    if (!gps) return Pen(0,0,0,-1);
+
+    int dimx = gps->dimx, dimy = gps->dimy;
+    if (x < 0 || x >= dimx || y < 0 || y >= dimy)
+        return Pen(0,0,0,-1);
+
+    int index = x*dimy + y;
+    auto screen = gps->screen + index*4;
+    if (screen[3] & 0x80)
+        return Pen(0,0,0,-1);
+
+    Pen pen(
+        screen[0], screen[1], screen[2], screen[3]?true:false,
+        gps->screentexpos[index]
+    );
+
+    if (pen.tile)
+    {
+        if (gps->screentexpos_grayscale[index])
+        {
+            pen.tile_mode = Screen::Pen::TileColor;
+            pen.tile_fg = gps->screentexpos_cf[index];
+            pen.tile_bg = gps->screentexpos_cbr[index];
+        }
+        else if (gps->screentexpos_addcolor[index])
+        {
+            pen.tile_mode = Screen::Pen::CharColor;
+        }
+    }
+
+    return pen;
 }
 
 bool Screen::paintString(const Pen &pen, int x, int y, const std::string &text)
@@ -132,7 +175,7 @@ bool Screen::paintString(const Pen &pen, int x, int y, const std::string &text)
 
 bool Screen::fillRect(const Pen &pen, int x1, int y1, int x2, int y2)
 {
-    if (!gps) return false;
+    if (!gps || !pen.valid()) return false;
 
     if (x1 < 0) x1 = 0;
     if (y1 < 0) y1 = 0;
@@ -156,7 +199,7 @@ bool Screen::drawBorder(const std::string &title)
     if (!gps) return false;
 
     int dimx = gps->dimx, dimy = gps->dimy;
-    Pen border(0xDB, 8);
+    Pen border('\xDB', 8);
     Pen text(0, 0, 7);
     Pen signature(0, 0, 8);
 
@@ -264,6 +307,94 @@ bool Screen::isDismissed(df::viewscreen *screen)
     return screen->breakdown_level != interface_breakdown_types::NONE;
 }
 
+#ifdef _LINUX
+// Link to the libgraphics class directly:
+class DFHACK_EXPORT enabler_inputst {
+ public:
+  std::string GetKeyDisplay(int binding);
+};
+
+class DFHACK_EXPORT renderer {
+    unsigned char *screen;
+    long *screentexpos;
+    char *screentexpos_addcolor;
+    unsigned char *screentexpos_grayscale;
+    unsigned char *screentexpos_cf;
+    unsigned char *screentexpos_cbr;
+    // For partial printing:
+    unsigned char *screen_old;
+    long *screentexpos_old;
+    char *screentexpos_addcolor_old;
+    unsigned char *screentexpos_grayscale_old;
+    unsigned char *screentexpos_cf_old;
+    unsigned char *screentexpos_cbr_old;
+public:
+    virtual void update_tile(int x, int y) {};
+    virtual void update_all() {};
+    virtual void render() {};
+    virtual void set_fullscreen();
+    virtual void zoom(df::zoom_commands cmd);
+    virtual void resize(int w, int h) {};
+    virtual void grid_resize(int w, int h) {};
+    renderer() {
+        screen = NULL;
+        screentexpos = NULL;
+        screentexpos_addcolor = NULL;
+        screentexpos_grayscale = NULL;
+        screentexpos_cf = NULL;
+        screentexpos_cbr = NULL;
+        screen_old = NULL;
+        screentexpos_old = NULL;
+        screentexpos_addcolor_old = NULL;
+        screentexpos_grayscale_old = NULL;
+        screentexpos_cf_old = NULL;
+        screentexpos_cbr_old = NULL;
+    }
+    virtual ~renderer();
+    virtual bool get_mouse_coords(int &x, int &y) { return false; }
+    virtual bool uses_opengl();
+};
+#else
+struct less_sz {
+  bool operator() (const string &a, const string &b) const {
+    if (a.size() < b.size()) return true;
+    if (a.size() > b.size()) return false;
+    return a < b;
+  }
+};
+static std::map<df::interface_key,std::set<string,less_sz> > *keydisplay = NULL;
+#endif
+
+void init_screen_module(Core *core)
+{
+#ifdef _LINUX
+    renderer tmp;
+    if (!strict_virtual_cast<df::renderer>((virtual_ptr)&tmp))
+        cerr << "Could not fetch the renderer vtable." << std::endl;
+#else
+    if (!core->vinfo->getAddress("keydisplay", keydisplay))
+        keydisplay = NULL;
+#endif
+}
+
+string Screen::getKeyDisplay(df::interface_key key)
+{
+#ifdef _LINUX
+    auto enabler = (enabler_inputst*)df::global::enabler;
+    if (enabler)
+        return enabler->GetKeyDisplay(key);
+#else
+    if (keydisplay)
+    {
+        auto it = keydisplay->find(key);
+        if (it != keydisplay->end() && !it->second.empty())
+            return *it->second.begin();
+    }
+#endif
+
+    return "?";
+}
+
 /*
  * Base DFHack viewscreen.
  */
@@ -285,6 +416,11 @@ dfhack_viewscreen::~dfhack_viewscreen()
 bool dfhack_viewscreen::is_instance(df::viewscreen *screen)
 {
     return dfhack_screens.count(screen) != 0;
+}
+
+dfhack_viewscreen *dfhack_viewscreen::try_cast(df::viewscreen *screen)
+{
+    return is_instance(screen) ? static_cast<dfhack_viewscreen*>(screen) : NULL;
 }
 
 void dfhack_viewscreen::check_resize()
@@ -547,7 +683,12 @@ dfhack_lua_viewscreen::~dfhack_lua_viewscreen()
 
 void dfhack_lua_viewscreen::render()
 {
-    if (Screen::isDismissed(this)) return;
+    if (Screen::isDismissed(this))
+    {
+        if (parent)
+            parent->render();
+        return;
+    }
 
     dfhack_viewscreen::render();
 
@@ -601,4 +742,36 @@ void dfhack_lua_viewscreen::onDismiss()
 {
     lua_pushstring(Lua::Core::State, "onDismiss");
     safe_call_lua(do_notify, 1, 0);
+}
+
+df::unit *dfhack_lua_viewscreen::getSelectedUnit()
+{
+    Lua::StackUnwinder frame(Lua::Core::State);
+    lua_pushstring(Lua::Core::State, "onGetSelectedUnit");
+    safe_call_lua(do_notify, 1, 1);
+    return Lua::GetDFObject<df::unit>(Lua::Core::State, -1);
+}
+
+df::item *dfhack_lua_viewscreen::getSelectedItem()
+{
+    Lua::StackUnwinder frame(Lua::Core::State);
+    lua_pushstring(Lua::Core::State, "onGetSelectedItem");
+    safe_call_lua(do_notify, 1, 1);
+    return Lua::GetDFObject<df::item>(Lua::Core::State, -1);
+}
+
+df::job *dfhack_lua_viewscreen::getSelectedJob()
+{
+    Lua::StackUnwinder frame(Lua::Core::State);
+    lua_pushstring(Lua::Core::State, "onGetSelectedJob");
+    safe_call_lua(do_notify, 1, 1);
+    return Lua::GetDFObject<df::job>(Lua::Core::State, -1);
+}
+
+df::building *dfhack_lua_viewscreen::getSelectedBuilding()
+{
+    Lua::StackUnwinder frame(Lua::Core::State);
+    lua_pushstring(Lua::Core::State, "onGetSelectedBuilding");
+    safe_call_lua(do_notify, 1, 1);
+    return Lua::GetDFObject<df::building>(Lua::Core::State, -1);
 }

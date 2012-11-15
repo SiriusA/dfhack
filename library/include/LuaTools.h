@@ -1,6 +1,6 @@
 /*
 https://github.com/peterix/dfhack
-Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
+Copyright (c) 2009-2012 Petr Mrázek (peterix@gmail.com)
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any
@@ -36,10 +36,14 @@ distribution.
 
 namespace DFHack {
     class function_identity_base;
+    struct MaterialInfo;
 
     namespace Units {
         struct NoblePosition;
     }
+    namespace Screen {
+        struct Pen;
+    };
 }
 
 namespace DFHack {namespace Lua {
@@ -283,8 +287,15 @@ namespace DFHack {namespace Lua {
     DFHACK_EXPORT void Push(lua_State *state, df::coord obj);
     DFHACK_EXPORT void Push(lua_State *state, df::coord2d obj);
     void Push(lua_State *state, const Units::NoblePosition &pos);
+    DFHACK_EXPORT void Push(lua_State *state, MaterialInfo &info);
+    DFHACK_EXPORT void Push(lua_State *state, const Screen::Pen &info);
     template<class T> inline void Push(lua_State *state, T *ptr) {
         PushDFObject(state, ptr);
+    }
+
+    template<class T> inline void SetField(lua_State *L, T val, int idx, const char *name) {
+        if (idx < 0) idx = lua_absindex(L, idx);
+        Push(L, val); lua_setfield(L, idx, name);
     }
 
     template<class T>
@@ -307,6 +318,8 @@ namespace DFHack {namespace Lua {
 
     DFHACK_EXPORT int PushPosXYZ(lua_State *state, df::coord pos);
     DFHACK_EXPORT int PushPosXY(lua_State *state, df::coord2d pos);
+
+    DFHACK_EXPORT void CheckPen(lua_State *L, Screen::Pen *pen, int index, bool allow_nil = false, bool allow_color = true);
 
     DFHACK_EXPORT bool IsCoreContext(lua_State *state);
 
